@@ -68,7 +68,12 @@ const STR: any = {
     deleteRecipeQ: 'Bu tarif silinsin mi?', updated: 'Güncellendi!', editingMsg: 'Mesaj düzenleniyor',
     editMessage: 'Düzenle', deleteMessageQ: 'Mesaj silinsin mi?', changePhoto: '📷 Fotoğrafı Değiştir',
     rating: 'Puan', bio: 'Biyografi', noRatingYet: 'Henüz puan yok',
-    rateTitle: 'Bu tarifi puanla', rated: 'Puanın kaydedildi!', rateFail: 'Puan gönderilemedi',
+    rateTitle: 'Bu tarifi puanla', rated: 'Değerlendirmen kaydedildi!', rateFail: 'Gönderilemedi',
+    trials: 'Denemeler', noTrials: 'Henüz deneme yok. İlk deneyen sen ol!',
+    reviewComment: 'Yorumun (opsiyonel)', addPhoto: '📷 Fotoğraf ekle', sendReview: 'Değerlendirmeyi Gönder', pickRating: 'Önce yıldızla puan ver',
+    block: 'Engelle', unblock: 'Engeli Kaldır', report: 'Şikayet Et', reported: 'Şikayetin alındı.', blocked: 'Durum güncellendi.',
+    reportTitle: 'Şikayet sebebi', reportSpam: 'Spam', reportInappropriate: 'Uygunsuz içerik', reportHarass: 'Taciz',
+    feedPopular: 'Popüler', feedTop: 'En Beğenilen', feedIng: 'Elimdekiler', ingHint: 'Malzemeleri virgülle yaz: yumurta, un, süt...',
   },
   en: {
     explore: 'Explore', favorites: 'Favorites', settings: 'Settings', add: 'Add',
@@ -112,7 +117,12 @@ const STR: any = {
     deleteRecipeQ: 'Delete this recipe?', updated: 'Updated!', editingMsg: 'Editing message',
     editMessage: 'Edit', deleteMessageQ: 'Delete this message?', changePhoto: '📷 Change Photo',
     rating: 'Rating', bio: 'Bio', noRatingYet: 'No ratings yet',
-    rateTitle: 'Rate this recipe', rated: 'Your rating is saved!', rateFail: 'Could not submit rating',
+    rateTitle: 'Rate this recipe', rated: 'Your review is saved!', rateFail: 'Could not submit',
+    trials: 'Cooked it', noTrials: 'No one cooked it yet. Be the first!',
+    reviewComment: 'Your comment (optional)', addPhoto: '📷 Add photo', sendReview: 'Submit Review', pickRating: 'Pick a star rating first',
+    block: 'Block', unblock: 'Unblock', report: 'Report', reported: 'Report received.', blocked: 'Updated.',
+    reportTitle: 'Report reason', reportSpam: 'Spam', reportInappropriate: 'Inappropriate', reportHarass: 'Harassment',
+    feedPopular: 'Popular', feedTop: 'Top Rated', feedIng: 'My Ingredients', ingHint: 'Comma-separated: eggs, flour, milk...',
   },
 };
 
@@ -160,18 +170,24 @@ type Nav =
 
 const bearer = (token: string) => ({ Authorization: 'Bearer ' + token });
 
+function toDate(iso: string) {
+  // Backend LocalDateTime'i zaman dilimsiz gelir (UTC). 'Z' yoksa UTC kabul edip yerele çeviriyoruz.
+  if (!iso) return new Date(NaN);
+  const hasZone = /([zZ])$|([+-]\d\d:?\d\d)$/.test(iso);
+  return new Date(hasZone ? iso : iso + 'Z');
+}
 function fmtTime(iso: string) {
-  try { const d = new Date(iso); return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); } catch (e) { return ''; }
+  try { const d = toDate(iso); return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2); } catch (e) { return ''; }
 }
 function fmtDate(iso: string) {
   try {
-    const d = new Date(iso); const now = new Date();
+    const d = toDate(iso); const now = new Date();
     const sameY = d.getFullYear() === now.getFullYear();
     return d.toLocaleDateString(undefined, sameY ? { day: 'numeric', month: 'long' } : { day: 'numeric', month: 'long', year: 'numeric' });
   } catch (e) { return ''; }
 }
 function sameDay(a: string, b: string) {
-  try { const x = new Date(a), y = new Date(b); return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate(); } catch (e) { return true; }
+  try { const x = toDate(a), y = toDate(b); return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate(); } catch (e) { return true; }
 }
 
 // ============ KÖK ============
@@ -464,13 +480,19 @@ function AuthedApp({ token, onLogout }: { token: string; onLogout: () => void })
     })();
   }, [token]);
 
-  // Okunmamış mesaj sayısı (mesaj sekmesi rozeti)
+  const [reqCount, setReqCount] = useState(0);
+
+  // Okunmamış mesaj + bekleyen takip isteği sayıları (sekme rozetleri)
   useEffect(() => {
     let on = true;
     const f = async () => {
       try {
         const r = await fetch(BASE_URL + '/api/messages/unread-count', { headers: bearer(token) });
         if (r.ok) { const d = await r.json(); if (on) setUnread(d.count || 0); }
+      } catch (e) {}
+      try {
+        const r2 = await fetch(BASE_URL + '/api/social/follow-requests', { headers: bearer(token) });
+        if (r2.ok) { const d2 = await r2.json(); if (on) setReqCount(Array.isArray(d2) ? d2.length : 0); }
       } catch (e) {}
     };
     f();
@@ -526,17 +548,20 @@ function AuthedApp({ token, onLogout }: { token: string; onLogout: () => void })
         {tab === 'profile' && <MyProfileScreen token={token} me={me} onLogout={onLogout} push={push} />}
       </View>
       <View style={[styles.bar, { backgroundColor: colors.barBg, borderTopColor: colors.barBorder, paddingBottom: insets.bottom + 8 }]}>
-        {tabs.map(([key, icon]) => (
-          <TouchableOpacity key={key} style={styles.barItem} onPress={() => setTab(key)} activeOpacity={0.7}>
-            <View>
-              <Text style={[styles.barIcon, { opacity: tab === key ? 1 : 0.45 }]}>{icon}</Text>
-              {key === 'messages' && unread > 0 && (
-                <View style={styles.badge}><Text style={styles.badgeText}>{unread > 9 ? '9+' : unread}</Text></View>
-              )}
-            </View>
-            <Text style={[styles.barLabel, { color: tab === key ? colors.accent : colors.sub }]}>{t(key)}</Text>
-          </TouchableOpacity>
-        ))}
+        {tabs.map(([key, icon]) => {
+          const badge = key === 'messages' ? unread : key === 'profile' ? reqCount : 0;
+          return (
+            <TouchableOpacity key={key} style={styles.barItem} onPress={() => setTab(key)} activeOpacity={0.7}>
+              <View>
+                <Text style={[styles.barIcon, { opacity: tab === key ? 1 : 0.45 }]}>{icon}</Text>
+                {badge > 0 && (
+                  <View style={styles.badge}><Text style={styles.badgeText}>{badge > 9 ? '9+' : badge}</Text></View>
+                )}
+              </View>
+              <Text style={[styles.barLabel, { color: tab === key ? colors.accent : colors.sub }]}>{t(key)}</Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
     </View>
   );
@@ -602,6 +627,9 @@ function ExploreScreen({ token, onOpen, onUser, onOpenUserId }: { token: string;
   const [error, setError] = useState<string | null>(null);
   const [users, setUsers] = useState<PublicProfile[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [feed, setFeed] = useState<'default' | 'popular' | 'top' | 'ing'>('default');
+  const [ingText, setIngText] = useState('');
+  const [ingDebounced, setIngDebounced] = useState('');
 
   useEffect(() => {
     (async () => {
@@ -617,12 +645,23 @@ function ExploreScreen({ token, onOpen, onUser, onOpenUserId }: { token: string;
     return () => clearTimeout(z);
   }, [searchQuery]);
 
+  useEffect(() => {
+    const z = setTimeout(() => setIngDebounced(ingText.trim()), 500);
+    return () => clearTimeout(z);
+  }, [ingText]);
+
   async function getir(silent = false) {
     try {
       if (!silent) setLoading(true);
       setError(null);
       let url: string;
       if (debouncedQuery.length >= 2) url = BASE_URL + '/api/recipes/search?keyword=' + encodeURIComponent(debouncedQuery) + '&page=0&size=20';
+      else if (feed === 'popular') url = BASE_URL + '/api/recipes/popular?page=0&size=20';
+      else if (feed === 'top') url = BASE_URL + '/api/recipes/top-rated?page=0&size=20';
+      else if (feed === 'ing') {
+        if (ingDebounced.length < 2) { setRecipes([]); setLoading(false); setRefreshing(false); return; }
+        url = BASE_URL + '/api/recipes/by-ingredients?ingredients=' + encodeURIComponent(ingDebounced) + '&page=0&size=20';
+      }
       else if (selectedCategoryId == null) url = BASE_URL + '/api/recipes?page=0&size=20';
       else url = BASE_URL + '/api/recipes/category/' + selectedCategoryId + '?page=0&size=20';
       const cevap = await fetch(url, { headers: bearer(token) });
@@ -631,7 +670,7 @@ function ExploreScreen({ token, onOpen, onUser, onOpenUserId }: { token: string;
       setRecipes(veri.content);
     } catch (e: any) { setError(e.message); } finally { setLoading(false); setRefreshing(false); }
   }
-  useEffect(() => { if (mode === 'recipes') getir(); }, [token, selectedCategoryId, debouncedQuery, mode]);
+  useEffect(() => { if (mode === 'recipes') getir(); }, [token, selectedCategoryId, debouncedQuery, mode, feed, ingDebounced]);
 
   useEffect(() => {
     if (mode !== 'users') return;
@@ -672,14 +711,28 @@ function ExploreScreen({ token, onOpen, onUser, onOpenUserId }: { token: string;
           placeholder={mode === 'users' ? t('searchUser') : t('search')} placeholderTextColor={colors.sub} autoCapitalize="none"
           value={searchQuery} onChangeText={setSearchQuery} />
         {mode === 'recipes' && !aramaAktif && (
-          <View style={{ flexGrow: 0 }}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-              <Chip label={'🍽️ ' + t('all')} active={selectedCategoryId == null} onPress={() => setSelectedCategoryId(null)} />
-              {categories.map((c) => (
-                <Chip key={c.id} label={`${c.emoji ?? ''} ${c.name}`} active={selectedCategoryId === c.id} onPress={() => setSelectedCategoryId(c.id)} />
-              ))}
-            </ScrollView>
-          </View>
+          <>
+            <View style={{ flexGrow: 0 }}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+                <Chip label={'🍽️ ' + t('all')} active={feed === 'default' && selectedCategoryId == null} onPress={() => { setFeed('default'); setSelectedCategoryId(null); }} />
+                <Chip label={'🔥 ' + t('feedPopular')} active={feed === 'popular'} onPress={() => setFeed('popular')} />
+                <Chip label={'⭐ ' + t('feedTop')} active={feed === 'top'} onPress={() => setFeed('top')} />
+                <Chip label={'🧺 ' + t('feedIng')} active={feed === 'ing'} onPress={() => setFeed('ing')} />
+              </ScrollView>
+            </View>
+            {feed === 'ing' ? (
+              <TextInput style={[styles.search, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder, color: colors.text }]}
+                placeholder={t('ingHint')} placeholderTextColor={colors.sub} autoCapitalize="none" value={ingText} onChangeText={setIngText} />
+            ) : feed === 'default' ? (
+              <View style={{ flexGrow: 0 }}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+                  {categories.map((c) => (
+                    <Chip key={c.id} label={`${c.emoji ?? ''} ${c.name}`} active={selectedCategoryId === c.id} onPress={() => setSelectedCategoryId(c.id)} />
+                  ))}
+                </ScrollView>
+              </View>
+            ) : null}
+          </>
         )}
       </View>
 
@@ -1154,6 +1207,32 @@ function UserProfileScreen({ token, userId, onBack, push }: { token: string; use
     } catch (e) {} finally { setBusy(false); }
   }
 
+  async function toggleBlock() {
+    try {
+      await fetch(BASE_URL + '/api/social/block/' + userId, { method: 'POST', headers: bearer(token) });
+      Alert.alert(t('info'), t('blocked'));
+      await load();
+    } catch (e) {}
+  }
+
+  function reportUser() {
+    const send = async (reason: string) => {
+      try {
+        await fetch(BASE_URL + '/api/social/report/USER/' + userId, {
+          method: 'POST', headers: { ...bearer(token), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason }),
+        });
+        Alert.alert(t('info'), t('reported'));
+      } catch (e) {}
+    };
+    Alert.alert(t('reportTitle'), '', [
+      { text: t('reportSpam'), onPress: () => send('SPAM') },
+      { text: t('reportInappropriate'), onPress: () => send('INAPPROPRIATE') },
+      { text: t('reportHarass'), onPress: () => send('HARASSMENT') },
+      { text: t('cancel'), style: 'cancel' },
+    ]);
+  }
+
   const followLabel = p ? (p.isFollowedByMe ? t('unfollow') : p.hasPendingRequest ? t('requested') : t('follow')) : '';
   const followActive = p ? (p.isFollowedByMe || p.hasPendingRequest) : false;
   const locked = !!p && p.isPrivate && !p.isFollowedByMe;
@@ -1186,6 +1265,15 @@ function UserProfileScreen({ token, userId, onBack, push }: { token: string; use
             <TouchableOpacity activeOpacity={0.85} onPress={() => push({ k: 'chat', userId: p.id, username: p.username })}
               style={[styles.primaryBtn, { flex: 1, backgroundColor: colors.chipBg }]}>
               <Text style={[styles.primaryBtnText, { color: colors.text }]}>💬 {t('message')}</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 24, marginTop: 14 }}>
+            <TouchableOpacity onPress={toggleBlock} activeOpacity={0.7}>
+              <Text style={{ color: colors.sub, fontWeight: '600' }}>{p.isBlockedByMe ? t('unblock') : '🚫 ' + t('block')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={reportUser} activeOpacity={0.7}>
+              <Text style={{ color: colors.sub, fontWeight: '600' }}>⚠️ {t('report')}</Text>
             </TouchableOpacity>
           </View>
 
@@ -1461,11 +1549,12 @@ function ChatScreen({ token, me, userId, username, onBack, onOpenProfile }: { to
           <Text style={{ color: '#fff', fontSize: 17, fontWeight: '700', marginLeft: 10 }} numberOfLines={1}>@{username}</Text>
         </TouchableOpacity>
       </View>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0}>
         {loading ? (
           <View style={styles.merkez}><ActivityIndicator size="large" color={colors.accent} /></View>
         ) : (
           <FlatList ref={listRef} data={msgs} keyExtractor={(i) => i.id.toString()}
+            style={{ flex: 1 }} keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ padding: 12 }}
             onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
             renderItem={({ item, index }) => {
@@ -1504,6 +1593,40 @@ function ChatScreen({ token, me, userId, username, onBack, onOpenProfile }: { to
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+    </View>
+  );
+}
+
+function TrialsSection({ token, recipeId, reload }: { token: string; recipeId: number; reload: number }) {
+  const { colors, t } = useApp();
+  const [list, setList] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    (async () => {
+      try {
+        setLoading(true);
+        const r = await fetch(BASE_URL + '/api/trials/recipe/' + recipeId + '?page=0&size=50', { headers: bearer(token) });
+        if (r.ok) { const d = await r.json(); setList(d.content || []); }
+      } catch (e) {} finally { setLoading(false); }
+    })();
+  }, [recipeId, reload]);
+  return (
+    <View style={{ marginTop: 18 }}>
+      <Text style={[styles.sectionTitle, { color: colors.text }]}>👩‍🍳 {t('trials')} {list.length > 0 ? '(' + list.length + ')' : ''}</Text>
+      {loading ? <ActivityIndicator color={colors.accent} /> : list.length === 0 ? (
+        <Text style={{ color: colors.sub }}>{t('noTrials')}</Text>
+      ) : list.map((tr) => (
+        <View key={tr.id} style={{ marginBottom: 14, backgroundColor: colors.meta, borderRadius: 14, padding: 12 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Avatar uri={tr.userProfileImage} name={tr.username} size={34} />
+            <Text style={{ color: colors.text, fontWeight: '600', marginLeft: 8, flex: 1 }} numberOfLines={1}>@{tr.username}</Text>
+            <Stars value={tr.rating} size={14} />
+          </View>
+          {tr.photoUrl ? <Image source={{ uri: tr.photoUrl }} style={{ width: '100%', height: 190, borderRadius: 12, marginTop: 10, backgroundColor: colors.card }} /> : null}
+          {tr.comment ? <Text style={{ color: colors.text, marginTop: 8, lineHeight: 20 }}>{tr.comment}</Text> : null}
+          <Text style={{ color: colors.sub, fontSize: 11, marginTop: 6 }}>{fmtDate(tr.createdAt)} {fmtTime(tr.createdAt)}</Text>
+        </View>
+      ))}
     </View>
   );
 }
@@ -1594,6 +1717,10 @@ function RecipeDetailScreen({ token, me, recipeId, onBack, onUser }: { token: st
   const [editing, setEditing] = useState(false);
   const [myRate, setMyRate] = useState(0);
   const [myTrialId, setMyTrialId] = useState<number | null>(null);
+  const [tComment, setTComment] = useState('');
+  const [tPhoto, setTPhoto] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [trialsReload, setTrialsReload] = useState(0);
 
   async function load() {
     try {
@@ -1612,28 +1739,42 @@ function RecipeDetailScreen({ token, me, recipeId, onBack, onUser }: { token: st
       if (r.ok) {
         const d = await r.json();
         const mine = (d.content || []).find((x: any) => x.recipeId === recipeId);
-        if (mine) { setMyRate(mine.rating); setMyTrialId(mine.id); }
+        if (mine) { setMyRate(mine.rating); setMyTrialId(mine.id); setTComment(mine.comment || ''); }
         else { setMyRate(0); setMyTrialId(null); }
       }
     } catch (e) {}
   }
   useEffect(() => { loadMyRating(); }, [token, recipeId, me]);
 
-  async function rate(value: number) {
-    const prev = myRate;
-    setMyRate(value);
+  async function pickTrialPhoto() {
+    const r = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.6 });
+    if (!r.canceled) setTPhoto(r.assets[0].uri);
+  }
+
+  async function submitTrial() {
+    if (myRate < 1) { Alert.alert(t('info'), t('pickRating')); return; }
+    setSubmitting(true);
     try {
-      // Önceki puanı (denemeyi) sil, yenisini gönder
       if (myTrialId != null) {
         await fetch(BASE_URL + '/api/trials/' + myTrialId, { method: 'DELETE', headers: bearer(token) });
         setMyTrialId(null);
       }
-      const fd = new FormData();
-      fd.append('trial', JSON.stringify({ rating: value }));
-      const r = await fetch(BASE_URL + '/api/trials/' + recipeId, { method: 'POST', headers: bearer(token), body: fd as any });
-      if (r.ok) { await load(); await loadMyRating(); }
-      else { setMyRate(prev); Alert.alert(t('info'), t('rateFail') + ' (' + r.status + ')'); }
-    } catch (e) { setMyRate(prev); }
+      const trialObj = { rating: myRate, comment: tComment.trim() || null };
+      if (tPhoto) {
+        const s = await FileSystem.uploadAsync(BASE_URL + '/api/trials/' + recipeId, tPhoto, {
+          httpMethod: 'POST', uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+          fieldName: 'photo', mimeType: 'image/jpeg', parameters: { trial: JSON.stringify(trialObj) }, headers: bearer(token),
+        });
+        if (s.status < 200 || s.status >= 300) throw new Error('(' + s.status + ')');
+      } else {
+        const fd = new FormData(); fd.append('trial', JSON.stringify(trialObj));
+        const r = await fetch(BASE_URL + '/api/trials/' + recipeId, { method: 'POST', headers: bearer(token), body: fd as any });
+        if (!r.ok) throw new Error('(' + r.status + ')');
+      }
+      setTPhoto(null);
+      Alert.alert(t('info'), t('rated'));
+      await load(); await loadMyRating(); setTrialsReload((x) => x + 1);
+    } catch (e: any) { Alert.alert(t('info'), t('rateFail') + ' ' + (e.message || '')); } finally { setSubmitting(false); }
   }
 
   function confirmDeleteRecipe() {
@@ -1691,7 +1832,16 @@ function RecipeDetailScreen({ token, me, recipeId, onBack, onUser }: { token: st
           {!isOwner && (
             <View style={{ marginTop: 14, padding: 14, borderRadius: 14, backgroundColor: colors.meta }}>
               <Text style={{ color: colors.text, fontWeight: '600', marginBottom: 8 }}>{t('rateTitle')}</Text>
-              <RateStars current={myRate} onRate={rate} />
+              <RateStars current={myRate} onRate={setMyRate} />
+              <TextInput style={[styles.input, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder, color: colors.text, marginTop: 10, marginBottom: 10 }]}
+                placeholder={t('reviewComment')} placeholderTextColor={colors.sub} value={tComment} onChangeText={setTComment} multiline />
+              <TouchableOpacity onPress={pickTrialPhoto} activeOpacity={0.8} style={{ marginBottom: 10 }}>
+                {tPhoto ? <Image source={{ uri: tPhoto }} style={{ width: '100%', height: 150, borderRadius: 12 }} />
+                  : <Text style={{ color: colors.accent, fontWeight: '600' }}>{t('addPhoto')}</Text>}
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.primaryBtn, { backgroundColor: colors.accent, marginTop: 0 }]} onPress={submitTrial} disabled={submitting} activeOpacity={0.85}>
+                {submitting ? <ActivityIndicator color={colors.accentText} /> : <Text style={[styles.primaryBtnText, { color: colors.accentText }]}>{t('sendReview')}</Text>}
+              </TouchableOpacity>
             </View>
           )}
           {isOwner && (
@@ -1717,6 +1867,7 @@ function RecipeDetailScreen({ token, me, recipeId, onBack, onUser }: { token: st
           ))}
           <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('howto')}</Text>
           <Text style={{ color: colors.sub, lineHeight: 24 }}>{recipe.steps}</Text>
+          <TrialsSection token={token} recipeId={recipe.id} reload={trialsReload} />
           <CommentsSection token={token} me={me} recipeId={recipe.id} />
           <View style={{ height: 40 }} />
         </ScrollView>
