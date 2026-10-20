@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, createContext, useContext } from 'react';
 import {
   StyleSheet, Text, View, FlatList, ActivityIndicator,
   TextInput, Image, TouchableOpacity, ScrollView, BackHandler, Alert,
-  KeyboardAvoidingView, Platform, Switch,
+  KeyboardAvoidingView, Platform, Switch, UIManager, LayoutAnimation, Animated,
 } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -11,6 +11,10 @@ import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 
 const BASE_URL = 'https://lezzetkodu-backend-production.up.railway.app';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 const lightColors = {
   bg: '#f7f7f9', card: '#ffffff', text: '#1a1a1a', sub: '#777', border: '#ececec',
@@ -74,6 +78,9 @@ const STR: any = {
     block: 'Engelle', unblock: 'Engeli Kaldır', report: 'Şikayet Et', reported: 'Şikayetin alındı.', blocked: 'Durum güncellendi.',
     reportTitle: 'Şikayet sebebi', reportSpam: 'Spam', reportInappropriate: 'Uygunsuz içerik', reportHarass: 'Taciz',
     feedPopular: 'Popüler', feedTop: 'En Beğenilen', feedIng: 'Elimdekiler', ingHint: 'Malzemeleri virgülle yaz: yumurta, un, süt...',
+    admin: 'Admin', adminReports: 'Şikayetler', adminUsers: 'Kullanıcılar',
+    stUsers: 'Kullanıcı', stRecipes: 'Tarif', stReports: 'Şikayet', stPending: 'Bekleyen',
+    resolve: 'Çöz', resolved: 'Çözüldü', pending: 'Bekliyor', banUser: 'Banla', unbanUser: 'Ban Kaldır', deleteContent: 'İçeriği Sil', bannedTag: 'BANLI',
   },
   en: {
     explore: 'Explore', favorites: 'Favorites', settings: 'Settings', add: 'Add',
@@ -123,6 +130,9 @@ const STR: any = {
     block: 'Block', unblock: 'Unblock', report: 'Report', reported: 'Report received.', blocked: 'Updated.',
     reportTitle: 'Report reason', reportSpam: 'Spam', reportInappropriate: 'Inappropriate', reportHarass: 'Harassment',
     feedPopular: 'Popular', feedTop: 'Top Rated', feedIng: 'My Ingredients', ingHint: 'Comma-separated: eggs, flour, milk...',
+    admin: 'Admin', adminReports: 'Reports', adminUsers: 'Users',
+    stUsers: 'Users', stRecipes: 'Recipes', stReports: 'Reports', stPending: 'Pending',
+    resolve: 'Resolve', resolved: 'Resolved', pending: 'Pending', banUser: 'Ban', unbanUser: 'Unban', deleteContent: 'Delete content', bannedTag: 'BANNED',
   },
 };
 
@@ -132,6 +142,7 @@ const useApp = () => useContext(AppContext);
 type Recipe = {
   id: number; title: string; description: string | null;
   imageUrl: string | null; username: string; isFavoritedByCurrentUser: boolean;
+  totalTime?: number | null; difficulty?: string | null; averageRating?: number | null; favoriteCount?: number | null;
 };
 type Ingredient = { id: number; name: string; quantity: number; unit: string };
 type RecipeDetail = Recipe & {
@@ -169,6 +180,8 @@ type Nav =
   | { k: 'userlist'; mode: 'followers' | 'following'; userId: number; title: string };
 
 const bearer = (token: string) => ({ Authorization: 'Bearer ' + token });
+
+function diffColor(d?: string | null) { return d === 'KOLAY' ? '#2e9e5b' : d === 'ZOR' ? '#d8392f' : '#e08a1e'; }
 
 function toDate(iso: string) {
   // Backend LocalDateTime'i zaman dilimsiz gelir (UTC). 'Z' yoksa UTC kabul edip yerele çeviriyoruz.
@@ -462,10 +475,11 @@ function TopBar({ title, onBack }: { title: string; onBack: () => void }) {
 function AuthedApp({ token, onLogout }: { token: string; onLogout: () => void }) {
   const { colors, t } = useApp();
   const insets = useSafeAreaInsets();
-  const [tab, setTab] = useState<'explore' | 'favorites' | 'add' | 'messages' | 'profile'>('explore');
+  const [tab, setTab] = useState<'explore' | 'favorites' | 'add' | 'messages' | 'profile' | 'admin'>('explore');
   const [stack, setStack] = useState<Nav[]>([]);
   const [me, setMe] = useState<Me>(null);
   const [unread, setUnread] = useState(0);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   // Kendi kimliğim (id + kullanıcı adı)
   useEffect(() => {
@@ -476,6 +490,16 @@ function AuthedApp({ token, onLogout }: { token: string; onLogout: () => void })
           const d = await r.json();
           setMe({ id: d.id ?? d.userId, username: d.username, profileImageUrl: d.profileImageUrl });
         }
+      } catch (e) {}
+    })();
+  }, [token]);
+
+  // Admin mi? (stats 200 dönerse admin)
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(BASE_URL + '/api/admin/stats', { headers: bearer(token) });
+        setIsAdmin(r.ok);
       } catch (e) {}
     })();
   }, [token]);
@@ -527,7 +551,7 @@ function AuthedApp({ token, onLogout }: { token: string; onLogout: () => void })
   const top = stack[stack.length - 1];
 
   if (top) {
-    if (top.k === 'recipe') return <RecipeDetailScreen token={token} me={me} recipeId={top.id} onBack={pop} onUser={openUsername} />;
+    if (top.k === 'recipe') return <RecipeDetailScreen token={token} me={me} isAdmin={isAdmin} recipeId={top.id} onBack={pop} onUser={openUsername} onOpenUserId={(id) => push({ k: 'user', userId: id })} />;
     if (top.k === 'user') return <UserProfileScreen token={token} userId={top.userId} onBack={pop} push={push} />;
     if (top.k === 'chat') return <ChatScreen token={token} me={me} userId={top.userId} username={top.username} onBack={pop} onOpenProfile={() => push({ k: 'user', userId: top.userId })} />;
     if (top.k === 'requests') return <RequestsScreen token={token} onBack={pop} push={push} />;
@@ -536,6 +560,7 @@ function AuthedApp({ token, onLogout }: { token: string; onLogout: () => void })
 
   const tabs: [typeof tab, string][] = [
     ['explore', '🍽️'], ['favorites', '❤️'], ['add', '➕'], ['messages', '💬'], ['profile', '👤'],
+    ...(isAdmin ? ([['admin', '🛡️']] as [typeof tab, string][]) : []),
   ];
 
   return (
@@ -546,6 +571,7 @@ function AuthedApp({ token, onLogout }: { token: string; onLogout: () => void })
         {tab === 'add' && <AddRecipeScreen token={token} onDone={() => setTab('explore')} />}
         {tab === 'messages' && <ConversationsScreen token={token} push={push} />}
         {tab === 'profile' && <MyProfileScreen token={token} me={me} onLogout={onLogout} push={push} />}
+        {tab === 'admin' && <AdminScreen token={token} push={push} />}
       </View>
       <View style={[styles.bar, { backgroundColor: colors.barBg, borderTopColor: colors.barBorder, paddingBottom: insets.bottom + 8 }]}>
         {tabs.map(([key, icon]) => {
@@ -577,14 +603,20 @@ function Header() {
 }
 
 function RecipeCard({ item, onOpen, onToggleFav, onUser }: { item: Recipe; onOpen: () => void; onToggleFav: () => void; onUser: (u: string) => void }) {
-  const { colors } = useApp();
+  const { colors, t } = useApp();
+  const diffLabel = item.difficulty === 'KOLAY' ? t('easy') : item.difficulty === 'ZOR' ? t('hard') : item.difficulty === 'ORTA' ? t('medium') : null;
   return (
-    <TouchableOpacity activeOpacity={0.85} onPress={onOpen}
+    <TouchableOpacity activeOpacity={0.9} onPress={onOpen}
       style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
       <View>
         {item.imageUrl
           ? <Image source={{ uri: item.imageUrl }} style={styles.cardImage} />
-          : <View style={[styles.cardImage, { backgroundColor: colors.meta }]} />}
+          : <View style={[styles.cardImage, { backgroundColor: colors.meta, justifyContent: 'center', alignItems: 'center' }]}><Text style={{ fontSize: 40 }}>🍽️</Text></View>}
+        {diffLabel && (
+          <View style={[styles.diffBadge, { backgroundColor: diffColor(item.difficulty) }]}>
+            <Text style={styles.diffBadgeText}>{diffLabel}</Text>
+          </View>
+        )}
         <TouchableOpacity style={styles.heartBtn} onPress={onToggleFav} activeOpacity={0.7}>
           <Text style={styles.heartIcon}>{item.isFavoritedByCurrentUser ? '❤️' : '🤍'}</Text>
         </TouchableOpacity>
@@ -595,6 +627,11 @@ function RecipeCard({ item, onOpen, onToggleFav, onUser }: { item: Recipe; onOpe
           <Text style={[styles.cardUser, { color: colors.accent }]}>@{item.username}</Text>
         </TouchableOpacity>
         {item.description ? <Text style={[styles.cardDesc, { color: colors.sub }]} numberOfLines={2}>{item.description}</Text> : null}
+        <View style={styles.metaPillRow}>
+          {item.totalTime ? <View style={[styles.pill, { backgroundColor: colors.meta }]}><Text style={[styles.pillText, { color: colors.sub }]}>⏱ {item.totalTime} {t('min')}</Text></View> : null}
+          {item.averageRating ? <View style={[styles.pill, { backgroundColor: colors.meta }]}><Text style={[styles.pillText, { color: colors.sub }]}>⭐ {item.averageRating.toFixed(1)}</Text></View> : null}
+          {item.favoriteCount != null ? <View style={[styles.pill, { backgroundColor: colors.meta }]}><Text style={[styles.pillText, { color: colors.sub }]}>❤️ {item.favoriteCount}</Text></View> : null}
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -630,6 +667,25 @@ function ExploreScreen({ token, onOpen, onUser, onOpenUserId }: { token: string;
   const [feed, setFeed] = useState<'default' | 'popular' | 'top' | 'ing'>('default');
   const [ingText, setIngText] = useState('');
   const [ingDebounced, setIngDebounced] = useState('');
+  const [filterH, setFilterH] = useState(150);
+  const anim = useRef(new Animated.Value(0)).current; // 0 = görünür, 1 = gizli
+  const shown = useRef(true);
+  const lastY = useRef(0);
+
+  function setShown(v: boolean) {
+    if (shown.current === v) return;
+    shown.current = v;
+    Animated.timing(anim, { toValue: v ? 0 : 1, duration: 200, useNativeDriver: true }).start();
+  }
+  function onScroll(e: any) {
+    const y = e.nativeEvent.contentOffset.y;
+    const dy = y - lastY.current;
+    if (y <= 4) setShown(true);
+    else if (dy > 6) setShown(false);
+    else if (dy < -6) setShown(true);
+    lastY.current = y;
+  }
+  const hideY = anim.interpolate({ inputRange: [0, 1], outputRange: [0, -filterH] });
 
   useEffect(() => {
     (async () => {
@@ -699,77 +755,88 @@ function ExploreScreen({ token, onOpen, onUser, onOpenUserId }: { token: string;
 
   const aramaAktif = debouncedQuery.length >= 2;
 
-  return (
-    <View style={{ flex: 1, backgroundColor: colors.bg }}>
-      <Header />
-      <View style={{ paddingHorizontal: 16 }}>
-        <View style={styles.segRow}>
-          <Seg active={mode === 'recipes'} label={'🍽️ ' + t('explore')} onPress={() => setMode('recipes')} />
-          <Seg active={mode === 'users'} label={'👥 ' + t('users')} onPress={() => setMode('users')} />
-        </View>
-        <TextInput style={[styles.search, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder, color: colors.text }]}
-          placeholder={mode === 'users' ? t('searchUser') : t('search')} placeholderTextColor={colors.sub} autoCapitalize="none"
-          value={searchQuery} onChangeText={setSearchQuery} />
-        {mode === 'recipes' && !aramaAktif && (
-          <>
+  const filterBar = (
+    <View onLayout={(e) => { const h = e.nativeEvent.layout.height; if (h > 0 && Math.abs(h - filterH) > 1) setFilterH(h); }}
+      style={{ paddingHorizontal: 16 }}>
+      <View style={styles.segRow}>
+        <Seg active={mode === 'recipes'} label={'🍽️ ' + t('explore')} onPress={() => setMode('recipes')} />
+        <Seg active={mode === 'users'} label={'👥 ' + t('users')} onPress={() => setMode('users')} />
+      </View>
+      <TextInput style={[styles.search, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder, color: colors.text }]}
+        placeholder={mode === 'users' ? t('searchUser') : t('search')} placeholderTextColor={colors.sub} autoCapitalize="none"
+        value={searchQuery} onChangeText={setSearchQuery} />
+      {mode === 'recipes' && !aramaAktif && (
+        <>
+          <View style={{ flexGrow: 0 }}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
+              <Chip label={'🔥 ' + t('feedPopular')} active={feed === 'popular'} onPress={() => setFeed(feed === 'popular' ? 'default' : 'popular')} />
+              <Chip label={'⭐ ' + t('feedTop')} active={feed === 'top'} onPress={() => setFeed(feed === 'top' ? 'default' : 'top')} />
+              <Chip label={'🧺 ' + t('feedIng')} active={feed === 'ing'} onPress={() => setFeed(feed === 'ing' ? 'default' : 'ing')} />
+            </ScrollView>
+          </View>
+          {feed === 'ing' ? (
+            <TextInput style={[styles.search, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder, color: colors.text }]}
+              placeholder={t('ingHint')} placeholderTextColor={colors.sub} autoCapitalize="none" value={ingText} onChangeText={setIngText} />
+          ) : (
             <View style={{ flexGrow: 0 }}>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
                 <Chip label={'🍽️ ' + t('all')} active={feed === 'default' && selectedCategoryId == null} onPress={() => { setFeed('default'); setSelectedCategoryId(null); }} />
-                <Chip label={'🔥 ' + t('feedPopular')} active={feed === 'popular'} onPress={() => setFeed('popular')} />
-                <Chip label={'⭐ ' + t('feedTop')} active={feed === 'top'} onPress={() => setFeed('top')} />
-                <Chip label={'🧺 ' + t('feedIng')} active={feed === 'ing'} onPress={() => setFeed('ing')} />
+                {categories.filter((c) => !/^(tümü|tumu|all|hepsi)$/i.test((c.name || '').trim())).map((c) => (
+                  <Chip key={c.id} label={`${c.emoji ?? ''} ${c.name}`} active={feed === 'default' && selectedCategoryId === c.id} onPress={() => { setFeed('default'); setSelectedCategoryId(c.id); }} />
+                ))}
               </ScrollView>
             </View>
-            {feed === 'ing' ? (
-              <TextInput style={[styles.search, { backgroundColor: colors.inputBg, borderColor: colors.inputBorder, color: colors.text }]}
-                placeholder={t('ingHint')} placeholderTextColor={colors.sub} autoCapitalize="none" value={ingText} onChangeText={setIngText} />
-            ) : feed === 'default' ? (
-              <View style={{ flexGrow: 0 }}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-                  {categories.map((c) => (
-                    <Chip key={c.id} label={`${c.emoji ?? ''} ${c.name}`} active={selectedCategoryId === c.id} onPress={() => setSelectedCategoryId(c.id)} />
-                  ))}
-                </ScrollView>
-              </View>
-            ) : null}
-          </>
-        )}
-      </View>
-
-      {mode === 'users' ? (
-        !aramaAktif ? (
-          <View style={styles.merkez}><Text style={{ color: colors.sub, textAlign: 'center' }}>{t('searchUserHint')}</Text></View>
-        ) : usersLoading ? (
-          <View style={styles.merkez}><ActivityIndicator size="large" color={colors.accent} /></View>
-        ) : users.length === 0 ? (
-          <View style={styles.merkez}><Text style={{ color: colors.sub }}>{t('noResults')}</Text></View>
-        ) : (
-          <FlatList data={users} keyExtractor={(i) => i.id.toString()}
-            contentContainerStyle={{ padding: 16 }}
-            renderItem={({ item }) => (
-              <TouchableOpacity style={[styles.listRow, { backgroundColor: colors.card, borderColor: colors.border }]} activeOpacity={0.7}
-                onPress={() => onOpenUserId(item.id)}>
-                <Avatar uri={item.profileImageUrl} name={item.username} size={46} />
-                <View style={{ marginLeft: 12, flex: 1 }}>
-                  <Text style={{ color: colors.text, fontWeight: '700' }} numberOfLines={1}>@{item.username}</Text>
-                  {item.bio ? <Text style={{ color: colors.sub, fontSize: 13 }} numberOfLines={1}>{item.bio}</Text> : null}
-                </View>
-                {item.isPrivate && <Text style={{ fontSize: 14 }}>🔒</Text>}
-              </TouchableOpacity>
-            )} />
-        )
-      ) : loading ? (
-        <View style={styles.merkez}><ActivityIndicator size="large" color={colors.accent} /><Text style={{ color: colors.sub, marginTop: 12 }}>{t('loading')}</Text></View>
-      ) : error ? (
-        <View style={styles.merkez}><Text style={styles.hata}>{error}</Text></View>
-      ) : recipes.length === 0 ? (
-        <View style={styles.merkez}><Text style={{ color: colors.sub }}>{aramaAktif ? t('noResults') : t('noneCat')}</Text></View>
-      ) : (
-        <FlatList data={recipes} keyExtractor={(i) => i.id.toString()}
-          refreshing={refreshing} onRefresh={() => { setRefreshing(true); getir(true); }}
-          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 16 }}
-          renderItem={({ item }) => <RecipeCard item={item} onOpen={() => onOpen(item.id)} onToggleFav={() => flipFav(item.id)} onUser={onUser} />} />
+          )}
+        </>
       )}
+    </View>
+  );
+
+  const content = mode === 'users' ? (
+    !aramaAktif ? (
+      <View style={styles.merkez}><Text style={{ color: colors.sub, textAlign: 'center' }}>{t('searchUserHint')}</Text></View>
+    ) : usersLoading ? (
+      <View style={styles.merkez}><ActivityIndicator size="large" color={colors.accent} /></View>
+    ) : users.length === 0 ? (
+      <View style={styles.merkez}><Text style={{ color: colors.sub }}>{t('noResults')}</Text></View>
+    ) : (
+      <FlatList data={users} keyExtractor={(i) => i.id.toString()}
+        onScroll={onScroll} scrollEventThrottle={16}
+        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: filterH + 8, paddingBottom: 16 }}
+        renderItem={({ item }) => (
+          <TouchableOpacity style={[styles.listRow, { backgroundColor: colors.card, borderColor: colors.border }]} activeOpacity={0.7}
+            onPress={() => onOpenUserId(item.id)}>
+            <Avatar uri={item.profileImageUrl} name={item.username} size={46} />
+            <View style={{ marginLeft: 12, flex: 1 }}>
+              <Text style={{ color: colors.text, fontWeight: '700' }} numberOfLines={1}>@{item.username}</Text>
+              {item.bio ? <Text style={{ color: colors.sub, fontSize: 13 }} numberOfLines={1}>{item.bio}</Text> : null}
+            </View>
+            {item.isPrivate && <Text style={{ fontSize: 14 }}>🔒</Text>}
+          </TouchableOpacity>
+        )} />
+    )
+  ) : loading ? (
+    <View style={styles.merkez}><ActivityIndicator size="large" color={colors.accent} /><Text style={{ color: colors.sub, marginTop: 12 }}>{t('loading')}</Text></View>
+  ) : error ? (
+    <View style={styles.merkez}><Text style={styles.hata}>{error}</Text></View>
+  ) : recipes.length === 0 ? (
+    <View style={styles.merkez}><Text style={{ color: colors.sub }}>{aramaAktif ? t('noResults') : t('noneCat')}</Text></View>
+  ) : (
+    <FlatList data={recipes} keyExtractor={(i) => i.id.toString()}
+      onScroll={onScroll} scrollEventThrottle={16}
+      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: filterH + 8, paddingBottom: 16 }}
+      renderItem={({ item }) => <RecipeCard item={item} onOpen={() => onOpen(item.id)} onToggleFav={() => flipFav(item.id)} onUser={onUser} />} />
+  );
+
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.bg }}>
+      <View style={{ zIndex: 10, elevation: 10, backgroundColor: colors.bg }}><Header /></View>
+      <View style={{ flex: 1 }}>
+        {content}
+        <Animated.View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 5, backgroundColor: colors.bg, transform: [{ translateY: hideY }] }}>
+          {filterBar}
+        </Animated.View>
+      </View>
     </View>
   );
 }
@@ -1025,7 +1092,7 @@ function StatBox({ value, label, onPress }: { value: number | string; label: str
   const { colors } = useApp();
   const inner = (
     <View style={styles.statBox}>
-      <Text style={[styles.statValue, { color: colors.text }]}>{value}</Text>
+      <Text style={[styles.statValue, { color: colors.accent }]}>{value}</Text>
       <Text style={[styles.statLabel, { color: colors.sub }]}>{label}</Text>
     </View>
   );
@@ -1144,13 +1211,18 @@ function MyProfileScreen({ token, me, onLogout, push }: { token: string; me: Me;
             </View>
           </View>
         ) : (
-          <View style={{ alignItems: 'center', marginBottom: 8 }}>
-            <Avatar uri={p.profileImageUrl} name={p.username} size={92} />
-            <Text style={[styles.profileName, { color: colors.text }]}>@{p.username}</Text>
-            <Text style={{ color: colors.sub, textAlign: 'center', marginTop: 4, lineHeight: 20 }}>{p.bio || t('noBio')}</Text>
-            <TouchableOpacity onPress={startEdit} activeOpacity={0.8} style={[styles.editProfileBtn, { borderColor: colors.border }]}>
-              <Text style={{ color: colors.text, fontWeight: '600' }}>✏️ {t('editProfile')}</Text>
-            </TouchableOpacity>
+          <View style={styles.heroWrap}>
+            <View style={[styles.heroBand, { backgroundColor: colors.accent }]} />
+            <View style={{ alignItems: 'center', marginTop: -46 }}>
+              <View style={{ borderWidth: 4, borderColor: colors.bg, borderRadius: 100 }}>
+                <Avatar uri={p.profileImageUrl} name={p.username} size={88} />
+              </View>
+              <Text style={[styles.profileName, { color: colors.text }]}>@{p.username}</Text>
+              <Text style={{ color: colors.sub, textAlign: 'center', marginTop: 4, lineHeight: 20 }}>{p.bio || t('noBio')}</Text>
+              <TouchableOpacity onPress={startEdit} activeOpacity={0.8} style={[styles.editProfileBtn, { borderColor: colors.border }]}>
+                <Text style={{ color: colors.text, fontWeight: '600' }}>✏️ {t('editProfile')}</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
@@ -1244,10 +1316,15 @@ function UserProfileScreen({ token, userId, onBack, push }: { token: string; use
         <View style={styles.merkez}><ActivityIndicator size="large" color={colors.accent} /></View>
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16 }}>
-          <View style={{ alignItems: 'center', marginBottom: 8 }}>
-            <Avatar uri={p.profileImageUrl} name={p.username} size={92} />
-            <Text style={[styles.profileName, { color: colors.text }]}>@{p.username}</Text>
-            <Text style={{ color: colors.sub, textAlign: 'center', marginTop: 4, lineHeight: 20 }}>{p.bio || t('noBio')}</Text>
+          <View style={styles.heroWrap}>
+            <View style={[styles.heroBand, { backgroundColor: colors.accent }]} />
+            <View style={{ alignItems: 'center', marginTop: -46 }}>
+              <View style={{ borderWidth: 4, borderColor: colors.bg, borderRadius: 100 }}>
+                <Avatar uri={p.profileImageUrl} name={p.username} size={88} />
+              </View>
+              <Text style={[styles.profileName, { color: colors.text }]}>@{p.username}</Text>
+              <Text style={{ color: colors.sub, textAlign: 'center', marginTop: 4, lineHeight: 20 }}>{p.bio || t('noBio')}</Text>
+            </View>
           </View>
 
           <View style={[styles.statRow, { backgroundColor: colors.meta }]}>
@@ -1597,7 +1674,7 @@ function ChatScreen({ token, me, userId, username, onBack, onOpenProfile }: { to
   );
 }
 
-function TrialsSection({ token, recipeId, reload }: { token: string; recipeId: number; reload: number }) {
+function TrialsSection({ token, recipeId, reload, onOpenUser }: { token: string; recipeId: number; reload: number; onOpenUser: (id: number) => void }) {
   const { colors, t } = useApp();
   const [list, setList] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1616,12 +1693,12 @@ function TrialsSection({ token, recipeId, reload }: { token: string; recipeId: n
       {loading ? <ActivityIndicator color={colors.accent} /> : list.length === 0 ? (
         <Text style={{ color: colors.sub }}>{t('noTrials')}</Text>
       ) : list.map((tr) => (
-        <View key={tr.id} style={{ marginBottom: 14, backgroundColor: colors.meta, borderRadius: 14, padding: 12 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Avatar uri={tr.userProfileImage} name={tr.username} size={34} />
-            <Text style={{ color: colors.text, fontWeight: '600', marginLeft: 8, flex: 1 }} numberOfLines={1}>@{tr.username}</Text>
+        <View key={tr.id} style={{ marginBottom: 14, backgroundColor: colors.meta, borderRadius: 16, padding: 12 }}>
+          <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center' }} activeOpacity={0.7} onPress={() => onOpenUser(tr.userId)}>
+            <Avatar uri={tr.userProfileImage} name={tr.username} size={36} />
+            <Text style={{ color: colors.accent, fontWeight: '700', marginLeft: 8, flex: 1 }} numberOfLines={1}>@{tr.username}</Text>
             <Stars value={tr.rating} size={14} />
-          </View>
+          </TouchableOpacity>
           {tr.photoUrl ? <Image source={{ uri: tr.photoUrl }} style={{ width: '100%', height: 190, borderRadius: 12, marginTop: 10, backgroundColor: colors.card }} /> : null}
           {tr.comment ? <Text style={{ color: colors.text, marginTop: 8, lineHeight: 20 }}>{tr.comment}</Text> : null}
           <Text style={{ color: colors.sub, fontSize: 11, marginTop: 6 }}>{fmtDate(tr.createdAt)} {fmtTime(tr.createdAt)}</Text>
@@ -1631,7 +1708,7 @@ function TrialsSection({ token, recipeId, reload }: { token: string; recipeId: n
   );
 }
 
-function CommentsSection({ token, me, recipeId }: { token: string; me: Me; recipeId: number }) {
+function CommentsSection({ token, me, recipeId, onOpenUser }: { token: string; me: Me; recipeId: number; onOpenUser: (id: number) => void }) {
   const { colors, t } = useApp();
   const [list, setList] = useState<Comment[]>([]);
   const [text, setText] = useState('');
@@ -1688,11 +1765,15 @@ function CommentsSection({ token, me, recipeId }: { token: string; me: Me; recip
         <Text style={{ color: colors.sub }}>{t('noComments')}</Text>
       ) : (
         list.map((c) => (
-          <View key={c.id} style={{ flexDirection: 'row', marginBottom: 14 }}>
-            <Avatar uri={c.userProfileImage} name={c.username} size={38} />
+          <View key={c.id} style={{ flexDirection: 'row', marginBottom: 12, backgroundColor: colors.meta, borderRadius: 14, padding: 12 }}>
+            <TouchableOpacity activeOpacity={0.7} onPress={() => onOpenUser(c.userId)}>
+              <Avatar uri={c.userProfileImage} name={c.username} size={38} />
+            </TouchableOpacity>
             <View style={{ marginLeft: 10, flex: 1 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Text style={{ color: colors.accent, fontWeight: '700', fontSize: 13 }}>@{c.username}</Text>
+                <TouchableOpacity activeOpacity={0.7} onPress={() => onOpenUser(c.userId)}>
+                  <Text style={{ color: colors.accent, fontWeight: '700', fontSize: 13 }}>@{c.username}</Text>
+                </TouchableOpacity>
                 <Text style={{ color: colors.sub, fontSize: 11, marginLeft: 8 }}>{fmtDate(c.createdAt)} {fmtTime(c.createdAt)}</Text>
                 {me != null && c.userId === me.id && (
                   <TouchableOpacity onPress={() => confirmDelete(c.id)} style={{ marginLeft: 'auto', paddingHorizontal: 6 }} activeOpacity={0.7}>
@@ -1700,7 +1781,7 @@ function CommentsSection({ token, me, recipeId }: { token: string; me: Me; recip
                   </TouchableOpacity>
                 )}
               </View>
-              <Text style={{ color: colors.text, marginTop: 2, lineHeight: 20 }}>{c.content}</Text>
+              <Text style={{ color: colors.text, marginTop: 4, lineHeight: 20 }}>{c.content}</Text>
             </View>
           </View>
         ))
@@ -1709,7 +1790,7 @@ function CommentsSection({ token, me, recipeId }: { token: string; me: Me; recip
   );
 }
 
-function RecipeDetailScreen({ token, me, recipeId, onBack, onUser }: { token: string; me: Me; recipeId: number; onBack: () => void; onUser: (u: string) => void }) {
+function RecipeDetailScreen({ token, me, isAdmin, recipeId, onBack, onUser, onOpenUserId }: { token: string; me: Me; isAdmin: boolean; recipeId: number; onBack: () => void; onUser: (u: string) => void; onOpenUserId: (id: number) => void }) {
   const { colors, t } = useApp();
   const [recipe, setRecipe] = useState<RecipeDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1778,10 +1859,12 @@ function RecipeDetailScreen({ token, me, recipeId, onBack, onUser }: { token: st
   }
 
   function confirmDeleteRecipe() {
+    const owner = !!me && !!recipe && recipe.userId === me.id;
+    const url = owner ? '/api/recipes/' + recipeId : '/api/admin/recipes/' + recipeId;
     Alert.alert(t('deleteRecipeQ'), '', [
       { text: t('cancel'), style: 'cancel' },
       { text: t('delete'), style: 'destructive', onPress: async () => {
-        try { await fetch(BASE_URL + '/api/recipes/' + recipeId, { method: 'DELETE', headers: bearer(token) }); } catch (e) {}
+        try { await fetch(BASE_URL + url, { method: 'DELETE', headers: bearer(token) }); } catch (e) {}
         onBack();
       } },
     ]);
@@ -1844,13 +1927,13 @@ function RecipeDetailScreen({ token, me, recipeId, onBack, onUser }: { token: st
               </TouchableOpacity>
             </View>
           )}
-          {isOwner && (
+          {(isOwner || isAdmin) && (
             <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
               <TouchableOpacity style={[styles.primaryBtn, { flex: 1, backgroundColor: colors.chipBg, marginTop: 0 }]} onPress={() => setEditing(true)} activeOpacity={0.85}>
                 <Text style={[styles.primaryBtnText, { color: colors.text }]}>✏️ {t('edit')}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.primaryBtn, { flex: 1, backgroundColor: colors.chipBg, marginTop: 0 }]} onPress={confirmDeleteRecipe} activeOpacity={0.85}>
-                <Text style={[styles.primaryBtnText, { color: colors.accent }]}>🗑️ {t('delete')}</Text>
+                <Text style={[styles.primaryBtnText, { color: colors.accent }]}>🗑️ {t('delete')}{!isOwner && isAdmin ? ' (admin)' : ''}</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -1867,11 +1950,145 @@ function RecipeDetailScreen({ token, me, recipeId, onBack, onUser }: { token: st
           ))}
           <Text style={[styles.sectionTitle, { color: colors.text }]}>{t('howto')}</Text>
           <Text style={{ color: colors.sub, lineHeight: 24 }}>{recipe.steps}</Text>
-          <TrialsSection token={token} recipeId={recipe.id} reload={trialsReload} />
-          <CommentsSection token={token} me={me} recipeId={recipe.id} />
+          <TrialsSection token={token} recipeId={recipe.id} reload={trialsReload} onOpenUser={onOpenUserId} />
+          <CommentsSection token={token} me={me} recipeId={recipe.id} onOpenUser={onOpenUserId} />
           <View style={{ height: 40 }} />
         </ScrollView>
       ) : null}
+    </View>
+  );
+}
+
+function AdminStat({ label, value, warn }: { label: string; value: any; warn?: boolean }) {
+  const { colors } = useApp();
+  return (
+    <View style={{ flexGrow: 1, minWidth: '45%', backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1, borderRadius: 14, padding: 14 }}>
+      <Text style={{ color: warn ? '#e08a1e' : colors.accent, fontSize: 22, fontWeight: 'bold' }}>{value ?? 0}</Text>
+      <Text style={{ color: colors.sub, fontSize: 12, marginTop: 2 }}>{label}</Text>
+    </View>
+  );
+}
+
+function AdminSeg({ active, label, onPress }: any) {
+  const { colors } = useApp();
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.8} style={[styles.seg, { backgroundColor: active ? colors.accent : colors.chipBg }]}>
+      <Text style={{ color: active ? colors.accentText : colors.chipText, fontWeight: active ? '700' : '400' }}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+function AdminScreen({ token, push }: { token: string; push: (n: Nav) => void }) {
+  const { colors, t } = useApp();
+  const [sub, setSub] = useState<'reports' | 'users'>('reports');
+  const [stats, setStats] = useState<any>(null);
+  const [reports, setReports] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  async function loadAll() {
+    try {
+      const s = await fetch(BASE_URL + '/api/admin/stats', { headers: bearer(token) }); if (s.ok) setStats(await s.json());
+      const r = await fetch(BASE_URL + '/api/admin/reports', { headers: bearer(token) }); if (r.ok) setReports(await r.json());
+      const u = await fetch(BASE_URL + '/api/admin/users', { headers: bearer(token) }); if (u.ok) setUsers(await u.json());
+    } catch (e) {} finally { setLoading(false); }
+  }
+  useEffect(() => { loadAll(); }, []);
+
+  async function resolveReport(id: number) {
+    setReports((prev) => prev.map((x) => x.id === id ? { ...x, status: 'RESOLVED' } : x));
+    try { await fetch(BASE_URL + '/api/admin/reports/' + id + '/resolve', { method: 'POST', headers: bearer(token) }); } catch (e) {}
+  }
+  function deleteTarget(rep: any) {
+    const type = (rep.targetType || '').toUpperCase();
+    const url = type === 'RECIPE' ? '/api/admin/recipes/' + rep.targetId : type === 'COMMENT' ? '/api/admin/comments/' + rep.targetId : null;
+    if (!url) { Alert.alert(t('info'), 'targetType: ' + rep.targetType); return; }
+    Alert.alert(t('deleteContent'), '#' + rep.targetId, [
+      { text: t('cancel'), style: 'cancel' },
+      { text: t('delete'), style: 'destructive', onPress: async () => {
+        try { await fetch(BASE_URL + url, { method: 'DELETE', headers: bearer(token) }); await resolveReport(rep.id); } catch (e) {}
+      } },
+    ]);
+  }
+  async function toggleBan(u: any) {
+    try {
+      const r = await fetch(BASE_URL + '/api/admin/users/' + u.id + '/ban', { method: 'POST', headers: bearer(token) });
+      const d = await r.json().catch(() => ({}));
+      Alert.alert(t('info'), d.message || (r.ok ? 'OK' : 'Hata'));
+      loadAll();
+    } catch (e) {}
+  }
+  const roleColor = (role: string) => role === 'ADMIN' ? '#8e44ad' : role === 'BANNED' ? '#d8392f' : colors.sub;
+
+  return (
+    <View style={{ flex: 1, backgroundColor: colors.bg }}>
+      <Header />
+      {loading ? <View style={styles.merkez}><ActivityIndicator size="large" color={colors.accent} /></View> : (
+        <>
+          {stats && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 12, gap: 8 }}>
+              <AdminStat label={t('stUsers')} value={stats.totalUsers} />
+              <AdminStat label={t('stRecipes')} value={stats.totalRecipes} />
+              <AdminStat label={t('stReports')} value={stats.totalReports} />
+              <AdminStat label={t('stPending')} value={stats.pendingReports} warn />
+            </View>
+          )}
+          <View style={[styles.segRow, { paddingHorizontal: 16, marginTop: 12 }]}>
+            <AdminSeg active={sub === 'reports'} label={t('adminReports')} onPress={() => setSub('reports')} />
+            <AdminSeg active={sub === 'users'} label={t('adminUsers')} onPress={() => setSub('users')} />
+          </View>
+          {sub === 'reports' ? (
+            <FlatList data={reports} keyExtractor={(i) => i.id.toString()}
+              contentContainerStyle={{ padding: 16, paddingTop: 0 }}
+              ListEmptyComponent={<Text style={{ color: colors.sub, textAlign: 'center', marginTop: 20 }}>{t('noResults')}</Text>}
+              renderItem={({ item }) => (
+                <View style={[styles.listRow, { flexDirection: 'column', alignItems: 'stretch', backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Text style={{ color: colors.text, fontWeight: '700', flex: 1 }}>{item.targetType} #{item.targetId}</Text>
+                    <Text style={{ color: item.status === 'PENDING' ? '#e08a1e' : '#2e9e5b', fontSize: 12, fontWeight: '700' }}>
+                      {item.status === 'PENDING' ? t('pending') : t('resolved')}
+                    </Text>
+                  </View>
+                  <Text style={{ color: colors.sub, marginTop: 4 }}>{item.reason}</Text>
+                  <Text style={{ color: colors.sub, fontSize: 12, marginTop: 2 }}>@{item.reporterUsername} · {fmtDate(item.createdAt)}</Text>
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                    {(item.targetType || '').toUpperCase() === 'USER' && (
+                      <TouchableOpacity style={[styles.miniBtn, { backgroundColor: colors.chipBg, marginLeft: 0 }]} onPress={() => push({ k: 'user', userId: item.targetId })}>
+                        <Text style={{ color: colors.text, fontWeight: '700', fontSize: 13 }}>👤 {t('profile')}</Text>
+                      </TouchableOpacity>
+                    )}
+                    {((item.targetType || '').toUpperCase() === 'RECIPE' || (item.targetType || '').toUpperCase() === 'COMMENT') && (
+                      <TouchableOpacity style={[styles.miniBtn, { backgroundColor: colors.chipBg, marginLeft: 0 }]} onPress={() => deleteTarget(item)}>
+                        <Text style={{ color: colors.accent, fontWeight: '700', fontSize: 13 }}>🗑️ {t('deleteContent')}</Text>
+                      </TouchableOpacity>
+                    )}
+                    {item.status === 'PENDING' && (
+                      <TouchableOpacity style={[styles.miniBtn, { backgroundColor: colors.accent, marginLeft: 0 }]} onPress={() => resolveReport(item.id)}>
+                        <Text style={{ color: colors.accentText, fontWeight: '700', fontSize: 13 }}>✓ {t('resolve')}</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </View>
+              )} />
+          ) : (
+            <FlatList data={users} keyExtractor={(i) => i.id.toString()}
+              contentContainerStyle={{ padding: 16, paddingTop: 0 }}
+              renderItem={({ item }) => (
+                <View style={[styles.listRow, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: colors.text, fontWeight: '700' }}>@{item.username} <Text style={{ color: roleColor(item.role), fontSize: 12 }}>· {item.role}</Text></Text>
+                    <Text style={{ color: colors.sub, fontSize: 12 }}>{item.email}</Text>
+                  </View>
+                  {item.role !== 'ADMIN' && (
+                    <TouchableOpacity style={[styles.miniBtn, { backgroundColor: item.role === 'BANNED' ? colors.chipBg : '#d8392f' }]} onPress={() => toggleBan(item)}>
+                      <Text style={{ color: item.role === 'BANNED' ? colors.text : '#fff', fontWeight: '700', fontSize: 13 }}>{item.role === 'BANNED' ? t('unbanUser') : t('banUser')}</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )} />
+          )}
+        </>
+      )}
     </View>
   );
 }
@@ -1899,6 +2116,11 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: 18, fontWeight: '700', marginBottom: 2 },
   cardUser: { fontSize: 13, marginBottom: 6, fontWeight: '600' },
   cardDesc: { fontSize: 14 },
+  diffBadge: { position: 'absolute', top: 10, left: 10, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20 },
+  diffBadgeText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  metaPillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
+  pill: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20 },
+  pillText: { fontSize: 12, fontWeight: '600' },
   bar: { flexDirection: 'row', borderTopWidth: 1, paddingTop: 10 },
   barItem: { flex: 1, alignItems: 'center' },
   barIcon: { fontSize: 22 },
@@ -1922,6 +2144,8 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 18, fontWeight: 'bold', marginTop: 16, marginBottom: 8 },
   profileName: { fontSize: 22, fontWeight: 'bold', marginTop: 10 },
   editProfileBtn: { marginTop: 12, borderWidth: 1, borderRadius: 20, paddingHorizontal: 18, paddingVertical: 8 },
+  heroWrap: { marginBottom: 8 },
+  heroBand: { height: 72, borderRadius: 18 },
   statRow: { flexDirection: 'row', borderRadius: 14, padding: 16, marginVertical: 16 },
   statBox: { alignItems: 'center' },
   statValue: { fontSize: 20, fontWeight: 'bold' },
