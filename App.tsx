@@ -183,6 +183,15 @@ const bearer = (token: string) => ({ Authorization: 'Bearer ' + token });
 
 function diffColor(d?: string | null) { return d === 'KOLAY' ? '#2e9e5b' : d === 'ZOR' ? '#d8392f' : '#e08a1e'; }
 
+// Oturum süresi dolunca (401) global çıkış tetikleyici
+const realFetch = fetch;
+let onUnauthorized: (() => void) | null = null;
+async function apiFetch(url: string, options?: any) {
+  const r = await realFetch(url, options);
+  if (r.status === 401 && onUnauthorized) { try { onUnauthorized(); } catch (e) {} }
+  return r;
+}
+
 function toDate(iso: string) {
   // Backend LocalDateTime'i zaman dilimsiz gelir (UTC). 'Z' yoksa UTC kabul edip yerele çeviriyoruz.
   if (!iso) return new Date(NaN);
@@ -229,6 +238,9 @@ export default function App() {
   async function girisBasarili(yeniToken: string) { await SecureStore.setItemAsync('token', yeniToken); setToken(yeniToken); }
   async function cikisYap() { await SecureStore.deleteItemAsync('token'); setToken(null); }
 
+  // 401 gelince her yerden çıkışı tetikleyebilmek için
+  useEffect(() => { onUnauthorized = () => { cikisYap(); }; return () => { onUnauthorized = null; }; });
+
   const colors = mode === 'dark' ? darkColors : lightColors;
   const t = (k: string) => STR[lang][k] ?? k;
   const ctx = { colors, mode, setMode, lang, setLang, t, dark: mode === 'dark' };
@@ -270,7 +282,7 @@ function LoginScreen({ onLoggedIn, onRegister, onForgot }: { onLoggedIn: (t: str
   async function girisYap() {
     try {
       setLoading(true); setError(null);
-      const cevap = await fetch(BASE_URL + '/api/auth/login', {
+      const cevap = await apiFetch(BASE_URL + '/api/auth/login', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ emailOrUsername, password }),
       });
@@ -315,7 +327,7 @@ function RegisterScreen({ onLoggedIn, onBack }: { onLoggedIn: (t: string) => voi
   async function kayitOl() {
     try {
       setLoading(true); setError(null);
-      const cevap = await fetch(BASE_URL + '/api/auth/register', {
+      const cevap = await apiFetch(BASE_URL + '/api/auth/register', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, email, password }),
       });
@@ -363,7 +375,7 @@ function ForgotScreen({ onBack }: { onBack: () => void }) {
   async function kodGonder() {
     try {
       setLoading(true); setError(null);
-      const cevap = await fetch(BASE_URL + '/api/auth/forgot-password', {
+      const cevap = await apiFetch(BASE_URL + '/api/auth/forgot-password', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),
       });
@@ -376,7 +388,7 @@ function ForgotScreen({ onBack }: { onBack: () => void }) {
   async function sifreSifirla() {
     try {
       setLoading(true); setError(null);
-      const cevap = await fetch(BASE_URL + '/api/auth/reset-password', {
+      const cevap = await apiFetch(BASE_URL + '/api/auth/reset-password', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, resetCode, newPassword }),
       });
@@ -485,7 +497,7 @@ function AuthedApp({ token, onLogout }: { token: string; onLogout: () => void })
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(BASE_URL + '/api/users/me', { headers: bearer(token) });
+        const r = await apiFetch(BASE_URL + '/api/users/me', { headers: bearer(token) });
         if (r.ok) {
           const d = await r.json();
           setMe({ id: d.id ?? d.userId, username: d.username, profileImageUrl: d.profileImageUrl });
@@ -498,7 +510,7 @@ function AuthedApp({ token, onLogout }: { token: string; onLogout: () => void })
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(BASE_URL + '/api/admin/stats', { headers: bearer(token) });
+        const r = await apiFetch(BASE_URL + '/api/admin/stats', { headers: bearer(token) });
         setIsAdmin(r.ok);
       } catch (e) {}
     })();
@@ -511,11 +523,11 @@ function AuthedApp({ token, onLogout }: { token: string; onLogout: () => void })
     let on = true;
     const f = async () => {
       try {
-        const r = await fetch(BASE_URL + '/api/messages/unread-count', { headers: bearer(token) });
+        const r = await apiFetch(BASE_URL + '/api/messages/unread-count', { headers: bearer(token) });
         if (r.ok) { const d = await r.json(); if (on) setUnread(d.count || 0); }
       } catch (e) {}
       try {
-        const r2 = await fetch(BASE_URL + '/api/social/follow-requests', { headers: bearer(token) });
+        const r2 = await apiFetch(BASE_URL + '/api/social/follow-requests', { headers: bearer(token) });
         if (r2.ok) { const d2 = await r2.json(); if (on) setReqCount(Array.isArray(d2) ? d2.length : 0); }
       } catch (e) {}
     };
@@ -540,7 +552,7 @@ function AuthedApp({ token, onLogout }: { token: string; onLogout: () => void })
   async function openUsername(username: string) {
     if (me && username.toLowerCase() === me.username.toLowerCase()) { setStack([]); setTab('profile'); return; }
     try {
-      const r = await fetch(BASE_URL + '/api/social/search/users?query=' + encodeURIComponent(username) + '&size=10', { headers: bearer(token) });
+      const r = await apiFetch(BASE_URL + '/api/social/search/users?query=' + encodeURIComponent(username) + '&size=10', { headers: bearer(token) });
       if (!r.ok) return;
       const list: PublicProfile[] = await r.json();
       const hit = list.find((u) => u.username?.toLowerCase() === username.toLowerCase());
@@ -648,7 +660,7 @@ function Chip({ label, active, onPress }: { label: string; active: boolean; onPr
 }
 
 async function toggleFavorite(token: string, id: number) {
-  await fetch(BASE_URL + '/api/favorites/toggle/' + id, { method: 'POST', headers: bearer(token) });
+  await apiFetch(BASE_URL + '/api/favorites/toggle/' + id, { method: 'POST', headers: bearer(token) });
 }
 
 function ExploreScreen({ token, onOpen, onUser, onOpenUserId }: { token: string; onOpen: (id: number) => void; onUser: (u: string) => void; onOpenUserId: (id: number) => void }) {
@@ -664,6 +676,9 @@ function ExploreScreen({ token, onOpen, onUser, onOpenUserId }: { token: string;
   const [error, setError] = useState<string | null>(null);
   const [users, setUsers] = useState<PublicProfile[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const pageRef = useRef(0);
   const [feed, setFeed] = useState<'default' | 'popular' | 'top' | 'ing'>('default');
   const [ingText, setIngText] = useState('');
   const [ingDebounced, setIngDebounced] = useState('');
@@ -690,7 +705,7 @@ function ExploreScreen({ token, onOpen, onUser, onOpenUserId }: { token: string;
   useEffect(() => {
     (async () => {
       try {
-        const c = await fetch(BASE_URL + '/api/categories', { headers: bearer(token) });
+        const c = await apiFetch(BASE_URL + '/api/categories', { headers: bearer(token) });
         if (c.ok) setCategories(await c.json());
       } catch (e) {}
     })();
@@ -706,27 +721,31 @@ function ExploreScreen({ token, onOpen, onUser, onOpenUserId }: { token: string;
     return () => clearTimeout(z);
   }, [ingText]);
 
-  async function getir(silent = false) {
+  function buildUrl(page: number): string | null {
+    if (debouncedQuery.length >= 2) return BASE_URL + '/api/recipes/search?keyword=' + encodeURIComponent(debouncedQuery) + '&page=' + page + '&size=20';
+    if (feed === 'popular') return BASE_URL + '/api/recipes/popular?page=' + page + '&size=20';
+    if (feed === 'top') return BASE_URL + '/api/recipes/top-rated?page=' + page + '&size=20';
+    if (feed === 'ing') return ingDebounced.length >= 2 ? BASE_URL + '/api/recipes/by-ingredients?ingredients=' + encodeURIComponent(ingDebounced) + '&page=' + page + '&size=20' : null;
+    if (selectedCategoryId == null) return BASE_URL + '/api/recipes?page=' + page + '&size=20';
+    return BASE_URL + '/api/recipes/category/' + selectedCategoryId + '?page=' + page + '&size=20';
+  }
+
+  async function getir(reset: boolean) {
+    const page = reset ? 0 : pageRef.current + 1;
+    const url = buildUrl(page);
+    if (!url) { setRecipes([]); setHasMore(false); setLoading(false); setRefreshing(false); return; }
     try {
-      if (!silent) setLoading(true);
+      if (reset) setLoading(true); else setLoadingMore(true);
       setError(null);
-      let url: string;
-      if (debouncedQuery.length >= 2) url = BASE_URL + '/api/recipes/search?keyword=' + encodeURIComponent(debouncedQuery) + '&page=0&size=20';
-      else if (feed === 'popular') url = BASE_URL + '/api/recipes/popular?page=0&size=20';
-      else if (feed === 'top') url = BASE_URL + '/api/recipes/top-rated?page=0&size=20';
-      else if (feed === 'ing') {
-        if (ingDebounced.length < 2) { setRecipes([]); setLoading(false); setRefreshing(false); return; }
-        url = BASE_URL + '/api/recipes/by-ingredients?ingredients=' + encodeURIComponent(ingDebounced) + '&page=0&size=20';
-      }
-      else if (selectedCategoryId == null) url = BASE_URL + '/api/recipes?page=0&size=20';
-      else url = BASE_URL + '/api/recipes/category/' + selectedCategoryId + '?page=0&size=20';
-      const cevap = await fetch(url, { headers: bearer(token) });
+      const cevap = await apiFetch(url, { headers: bearer(token) });
       if (!cevap.ok) throw new Error(t('fetchFail') + ' (' + cevap.status + ')');
       const veri = await cevap.json();
-      setRecipes(veri.content);
-    } catch (e: any) { setError(e.message); } finally { setLoading(false); setRefreshing(false); }
+      pageRef.current = page;
+      setHasMore(veri.last === false);
+      setRecipes((prev) => reset ? (veri.content || []) : [...prev, ...(veri.content || [])]);
+    } catch (e: any) { setError(e.message); } finally { setLoading(false); setLoadingMore(false); setRefreshing(false); }
   }
-  useEffect(() => { if (mode === 'recipes') getir(); }, [token, selectedCategoryId, debouncedQuery, mode, feed, ingDebounced]);
+  useEffect(() => { if (mode === 'recipes') getir(true); }, [token, selectedCategoryId, debouncedQuery, mode, feed, ingDebounced]);
 
   useEffect(() => {
     if (mode !== 'users') return;
@@ -735,7 +754,7 @@ function ExploreScreen({ token, onOpen, onUser, onOpenUserId }: { token: string;
       if (q.length < 2) { setUsers([]); return; }
       try {
         setUsersLoading(true);
-        const r = await fetch(BASE_URL + '/api/social/search/users?query=' + encodeURIComponent(q) + '&size=30', { headers: bearer(token) });
+        const r = await apiFetch(BASE_URL + '/api/social/search/users?query=' + encodeURIComponent(q) + '&size=30', { headers: bearer(token) });
         if (r.ok) setUsers(await r.json());
       } catch (e) {} finally { setUsersLoading(false); }
     })();
@@ -824,6 +843,9 @@ function ExploreScreen({ token, onOpen, onUser, onOpenUserId }: { token: string;
   ) : (
     <FlatList data={recipes} keyExtractor={(i) => i.id.toString()}
       onScroll={onScroll} scrollEventThrottle={16}
+      onEndReached={() => { if (hasMore && !loadingMore && !loading) getir(false); }}
+      onEndReachedThreshold={0.4}
+      ListFooterComponent={loadingMore ? <ActivityIndicator color={colors.accent} style={{ marginVertical: 16 }} /> : null}
       contentContainerStyle={{ paddingHorizontal: 16, paddingTop: filterH + 8, paddingBottom: 16 }}
       renderItem={({ item }) => <RecipeCard item={item} onOpen={() => onOpen(item.id)} onToggleFav={() => flipFav(item.id)} onUser={onUser} />} />
   );
@@ -852,7 +874,7 @@ function FavoritesScreen({ token, onOpen, onUser }: { token: string; onOpen: (id
     try {
       if (!silent) setLoading(true);
       setError(null);
-      const cevap = await fetch(BASE_URL + '/api/favorites?page=0&size=50', { headers: bearer(token) });
+      const cevap = await apiFetch(BASE_URL + '/api/favorites?page=0&size=50', { headers: bearer(token) });
       if (!cevap.ok) throw new Error(t('fetchFail') + ' (' + cevap.status + ')');
       const veri = await cevap.json();
       setRecipes(veri.content);
@@ -907,7 +929,7 @@ function RecipeForm({ token, recipeId, initial, onDone }: { token: string; recip
   useEffect(() => {
     (async () => {
       try {
-        const c = await fetch(BASE_URL + '/api/categories', { headers: bearer(token) });
+        const c = await apiFetch(BASE_URL + '/api/categories', { headers: bearer(token) });
         if (c.ok) setCategories(await c.json());
       } catch (e) {}
     })();
@@ -968,7 +990,7 @@ function RecipeForm({ token, recipeId, initial, onDone }: { token: string; recip
         // Sadece düzenleme, yeni foto yok → fotoğrafsız multipart PUT
         const fd = new FormData();
         fd.append('recipe', JSON.stringify(recipeObj));
-        const r = await fetch(url, { method: 'PUT', headers: bearer(token), body: fd as any });
+        const r = await apiFetch(url, { method: 'PUT', headers: bearer(token), body: fd as any });
         if (!r.ok) throw new Error(t('publishFail') + ' (' + r.status + ')');
       }
 
@@ -1107,7 +1129,7 @@ function ProfileRecipes({ token, userId, onOpen }: { token: string; userId: numb
     (async () => {
       try {
         setLoading(true);
-        const r = await fetch(BASE_URL + '/api/recipes/user/' + userId + '?page=0&size=50', { headers: bearer(token) });
+        const r = await apiFetch(BASE_URL + '/api/recipes/user/' + userId + '?page=0&size=50', { headers: bearer(token) });
         if (r.ok) { const d = await r.json(); setList(d.content || []); }
       } catch (e) {} finally { setLoading(false); }
     })();
@@ -1136,9 +1158,9 @@ function MyProfileScreen({ token, me, onLogout, push }: { token: string; me: Me;
   async function load() {
     if (!me) return;
     try {
-      const r = await fetch(BASE_URL + '/api/social/profile/' + me.id, { headers: bearer(token) });
+      const r = await apiFetch(BASE_URL + '/api/social/profile/' + me.id, { headers: bearer(token) });
       if (r.ok) setP(await r.json());
-      const rr = await fetch(BASE_URL + '/api/social/follow-requests', { headers: bearer(token) });
+      const rr = await apiFetch(BASE_URL + '/api/social/follow-requests', { headers: bearer(token) });
       if (rr.ok) { const d = await rr.json(); setReqCount(Array.isArray(d) ? d.length : 0); }
     } catch (e) {}
   }
@@ -1146,7 +1168,7 @@ function MyProfileScreen({ token, me, onLogout, push }: { token: string; me: Me;
 
   async function togglePrivacy() {
     setP((prev) => prev ? { ...prev, isPrivate: !prev.isPrivate } : prev);
-    try { await fetch(BASE_URL + '/api/social/privacy/toggle', { method: 'POST', headers: bearer(token) }); } catch (e) {}
+    try { await apiFetch(BASE_URL + '/api/social/privacy/toggle', { method: 'POST', headers: bearer(token) }); } catch (e) {}
   }
 
   const [editing, setEditing] = useState(false);
@@ -1163,7 +1185,7 @@ function MyProfileScreen({ token, me, onLogout, push }: { token: string; me: Me;
   async function saveProfile() {
     setSaving(true);
     try {
-      await fetch(BASE_URL + '/api/users/me', {
+      await apiFetch(BASE_URL + '/api/users/me', {
         method: 'PUT', headers: { ...bearer(token), 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: eUsername.trim(), bio: eBio.trim() }),
       });
@@ -1265,7 +1287,7 @@ function UserProfileScreen({ token, userId, onBack, push }: { token: string; use
   async function load() {
     try {
       setLoading(true);
-      const r = await fetch(BASE_URL + '/api/social/profile/' + userId, { headers: bearer(token) });
+      const r = await apiFetch(BASE_URL + '/api/social/profile/' + userId, { headers: bearer(token) });
       if (r.ok) setP(await r.json());
     } catch (e) {} finally { setLoading(false); }
   }
@@ -1274,14 +1296,14 @@ function UserProfileScreen({ token, userId, onBack, push }: { token: string; use
   async function toggleFollow() {
     setBusy(true);
     try {
-      await fetch(BASE_URL + '/api/social/follow/' + userId, { method: 'POST', headers: bearer(token) });
+      await apiFetch(BASE_URL + '/api/social/follow/' + userId, { method: 'POST', headers: bearer(token) });
       await load();
     } catch (e) {} finally { setBusy(false); }
   }
 
   async function toggleBlock() {
     try {
-      await fetch(BASE_URL + '/api/social/block/' + userId, { method: 'POST', headers: bearer(token) });
+      await apiFetch(BASE_URL + '/api/social/block/' + userId, { method: 'POST', headers: bearer(token) });
       Alert.alert(t('info'), t('blocked'));
       await load();
     } catch (e) {}
@@ -1290,7 +1312,7 @@ function UserProfileScreen({ token, userId, onBack, push }: { token: string; use
   function reportUser() {
     const send = async (reason: string) => {
       try {
-        await fetch(BASE_URL + '/api/social/report/USER/' + userId, {
+        await apiFetch(BASE_URL + '/api/social/report/USER/' + userId, {
           method: 'POST', headers: { ...bearer(token), 'Content-Type': 'application/json' },
           body: JSON.stringify({ reason }),
         });
@@ -1381,7 +1403,7 @@ function RequestsScreen({ token, onBack, push }: { token: string; onBack: () => 
   async function load() {
     try {
       setLoading(true);
-      const r = await fetch(BASE_URL + '/api/social/follow-requests', { headers: bearer(token) });
+      const r = await apiFetch(BASE_URL + '/api/social/follow-requests', { headers: bearer(token) });
       if (r.ok) setReqs(await r.json());
     } catch (e) {} finally { setLoading(false); }
   }
@@ -1390,7 +1412,7 @@ function RequestsScreen({ token, onBack, push }: { token: string; onBack: () => 
   async function act(id: number, action: 'accept' | 'reject') {
     setReqs((prev) => prev.filter((x) => x.id !== id));
     try {
-      await fetch(BASE_URL + '/api/social/follow-requests/' + id + '/' + action, { method: 'POST', headers: bearer(token) });
+      await apiFetch(BASE_URL + '/api/social/follow-requests/' + id + '/' + action, { method: 'POST', headers: bearer(token) });
     } catch (e) {}
   }
 
@@ -1434,7 +1456,7 @@ function UserListScreen({ token, mode, userId, title, onBack, push }: { token: s
     (async () => {
       try {
         setLoading(true);
-        const r = await fetch(BASE_URL + '/api/social/' + mode + '/' + userId + '?page=0&size=100', { headers: bearer(token) });
+        const r = await apiFetch(BASE_URL + '/api/social/' + mode + '/' + userId + '?page=0&size=100', { headers: bearer(token) });
         if (r.ok) setUsers(await r.json());
       } catch (e) {} finally { setLoading(false); }
     })();
@@ -1475,7 +1497,7 @@ function ConversationsScreen({ token, push }: { token: string; push: (n: Nav) =>
 
   async function load() {
     try {
-      const r = await fetch(BASE_URL + '/api/messages/conversations', { headers: bearer(token) });
+      const r = await apiFetch(BASE_URL + '/api/messages/conversations', { headers: bearer(token) });
       if (r.ok) setConvos(await r.json());
     } catch (e) {} finally { setLoading(false); }
   }
@@ -1487,7 +1509,7 @@ function ConversationsScreen({ token, push }: { token: string; push: (n: Nav) =>
       const query = q.trim();
       if (query.length < 2) { setResults(null); return; }
       try {
-        const r = await fetch(BASE_URL + '/api/social/search/users?query=' + encodeURIComponent(query) + '&size=20', { headers: bearer(token) });
+        const r = await apiFetch(BASE_URL + '/api/social/search/users?query=' + encodeURIComponent(query) + '&size=20', { headers: bearer(token) });
         if (r.ok) setResults(await r.json());
       } catch (e) {}
     }, 400);
@@ -1560,7 +1582,7 @@ function ChatScreen({ token, me, userId, username, onBack, onOpenProfile }: { to
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(BASE_URL + '/api/social/profile/' + userId, { headers: bearer(token) });
+        const r = await apiFetch(BASE_URL + '/api/social/profile/' + userId, { headers: bearer(token) });
         if (r.ok) { const d = await r.json(); setAvatar(d.profileImageUrl); }
       } catch (e) {}
     })();
@@ -1568,7 +1590,7 @@ function ChatScreen({ token, me, userId, username, onBack, onOpenProfile }: { to
 
   async function load() {
     try {
-      const r = await fetch(BASE_URL + '/api/messages/conversation/' + userId + '?page=0&size=50', { headers: bearer(token) });
+      const r = await apiFetch(BASE_URL + '/api/messages/conversation/' + userId + '?page=0&size=50', { headers: bearer(token) });
       if (r.ok) {
         const d = await r.json();
         const content: Message[] = (d.content || []).slice().sort((a: Message, b: Message) => a.id - b.id);
@@ -1586,14 +1608,14 @@ function ChatScreen({ token, me, userId, username, onBack, onOpenProfile }: { to
     setSending(true);
     try {
       if (editingId != null) {
-        const r = await fetch(BASE_URL + '/api/messages/' + editingId, {
+        const r = await apiFetch(BASE_URL + '/api/messages/' + editingId, {
           method: 'PUT', headers: { ...bearer(token), 'Content-Type': 'application/json' },
           body: JSON.stringify({ content: c }),
         });
         if (!r.ok) { setText(c); Alert.alert(t('info'), '(' + r.status + ')'); }
         else { setEditingId(null); await load(); }
       } else {
-        const r = await fetch(BASE_URL + '/api/messages/' + userId, {
+        const r = await apiFetch(BASE_URL + '/api/messages/' + userId, {
           method: 'POST', headers: { ...bearer(token), 'Content-Type': 'application/json' },
           body: JSON.stringify({ content: c }),
         });
@@ -1609,7 +1631,7 @@ function ChatScreen({ token, me, userId, username, onBack, onOpenProfile }: { to
       { text: t('editMessage'), onPress: () => { setEditingId(m.id); setText(m.content); } },
       { text: t('delete'), style: 'destructive', onPress: async () => {
         setMsgs((prev) => prev.filter((x) => x.id !== m.id));
-        try { await fetch(BASE_URL + '/api/messages/' + m.id, { method: 'DELETE', headers: bearer(token) }); } catch (e) {}
+        try { await apiFetch(BASE_URL + '/api/messages/' + m.id, { method: 'DELETE', headers: bearer(token) }); } catch (e) {}
       } },
       { text: t('cancel'), style: 'cancel' },
     ]);
@@ -1682,7 +1704,7 @@ function TrialsSection({ token, recipeId, reload, onOpenUser }: { token: string;
     (async () => {
       try {
         setLoading(true);
-        const r = await fetch(BASE_URL + '/api/trials/recipe/' + recipeId + '?page=0&size=50', { headers: bearer(token) });
+        const r = await apiFetch(BASE_URL + '/api/trials/recipe/' + recipeId + '?page=0&size=50', { headers: bearer(token) });
         if (r.ok) { const d = await r.json(); setList(d.content || []); }
       } catch (e) {} finally { setLoading(false); }
     })();
@@ -1717,7 +1739,7 @@ function CommentsSection({ token, me, recipeId, onOpenUser }: { token: string; m
 
   async function load() {
     try {
-      const r = await fetch(BASE_URL + '/api/comments/' + recipeId + '?page=0&size=50', { headers: bearer(token) });
+      const r = await apiFetch(BASE_URL + '/api/comments/' + recipeId + '?page=0&size=50', { headers: bearer(token) });
       if (r.ok) { const d = await r.json(); setList(d.content || []); }
     } catch (e) {} finally { setLoading(false); }
   }
@@ -1728,7 +1750,7 @@ function CommentsSection({ token, me, recipeId, onOpenUser }: { token: string; m
     if (!c) return;
     setSending(true);
     try {
-      const r = await fetch(BASE_URL + '/api/comments/' + recipeId, {
+      const r = await apiFetch(BASE_URL + '/api/comments/' + recipeId, {
         method: 'POST', headers: { ...bearer(token), 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: c }),
       });
@@ -1742,7 +1764,7 @@ function CommentsSection({ token, me, recipeId, onOpenUser }: { token: string; m
       { text: t('cancel'), style: 'cancel' },
       { text: t('delete'), style: 'destructive', onPress: async () => {
         setList((prev) => prev.filter((x) => x.id !== id));
-        try { await fetch(BASE_URL + '/api/comments/' + id, { method: 'DELETE', headers: bearer(token) }); } catch (e) {}
+        try { await apiFetch(BASE_URL + '/api/comments/' + id, { method: 'DELETE', headers: bearer(token) }); } catch (e) {}
       } },
     ]);
   }
@@ -1806,7 +1828,7 @@ function RecipeDetailScreen({ token, me, isAdmin, recipeId, onBack, onUser, onOp
   async function load() {
     try {
       setLoading(true); setError(null);
-      const cevap = await fetch(BASE_URL + '/api/recipes/' + recipeId, { headers: bearer(token) });
+      const cevap = await apiFetch(BASE_URL + '/api/recipes/' + recipeId, { headers: bearer(token) });
       if (!cevap.ok) throw new Error(t('fetchFail') + ' (' + cevap.status + ')');
       setRecipe(await cevap.json());
     } catch (e: any) { setError(e.message); } finally { setLoading(false); }
@@ -1816,7 +1838,7 @@ function RecipeDetailScreen({ token, me, isAdmin, recipeId, onBack, onUser, onOp
   async function loadMyRating() {
     if (!me) return;
     try {
-      const r = await fetch(BASE_URL + '/api/trials/my?page=0&size=200', { headers: bearer(token) });
+      const r = await apiFetch(BASE_URL + '/api/trials/my?page=0&size=200', { headers: bearer(token) });
       if (r.ok) {
         const d = await r.json();
         const mine = (d.content || []).find((x: any) => x.recipeId === recipeId);
@@ -1837,7 +1859,7 @@ function RecipeDetailScreen({ token, me, isAdmin, recipeId, onBack, onUser, onOp
     setSubmitting(true);
     try {
       if (myTrialId != null) {
-        await fetch(BASE_URL + '/api/trials/' + myTrialId, { method: 'DELETE', headers: bearer(token) });
+        await apiFetch(BASE_URL + '/api/trials/' + myTrialId, { method: 'DELETE', headers: bearer(token) });
         setMyTrialId(null);
       }
       const trialObj = { rating: myRate, comment: tComment.trim() || null };
@@ -1849,7 +1871,7 @@ function RecipeDetailScreen({ token, me, isAdmin, recipeId, onBack, onUser, onOp
         if (s.status < 200 || s.status >= 300) throw new Error('(' + s.status + ')');
       } else {
         const fd = new FormData(); fd.append('trial', JSON.stringify(trialObj));
-        const r = await fetch(BASE_URL + '/api/trials/' + recipeId, { method: 'POST', headers: bearer(token), body: fd as any });
+        const r = await apiFetch(BASE_URL + '/api/trials/' + recipeId, { method: 'POST', headers: bearer(token), body: fd as any });
         if (!r.ok) throw new Error('(' + r.status + ')');
       }
       setTPhoto(null);
@@ -1858,13 +1880,18 @@ function RecipeDetailScreen({ token, me, isAdmin, recipeId, onBack, onUser, onOp
     } catch (e: any) { Alert.alert(t('info'), t('rateFail') + ' ' + (e.message || '')); } finally { setSubmitting(false); }
   }
 
+  function toggleFav() {
+    setRecipe((prev) => prev ? { ...prev, isFavoritedByCurrentUser: !prev.isFavoritedByCurrentUser } : prev);
+    toggleFavorite(token, recipeId).catch(() => {});
+  }
+
   function confirmDeleteRecipe() {
     const owner = !!me && !!recipe && recipe.userId === me.id;
     const url = owner ? '/api/recipes/' + recipeId : '/api/admin/recipes/' + recipeId;
     Alert.alert(t('deleteRecipeQ'), '', [
       { text: t('cancel'), style: 'cancel' },
       { text: t('delete'), style: 'destructive', onPress: async () => {
-        try { await fetch(BASE_URL + url, { method: 'DELETE', headers: bearer(token) }); } catch (e) {}
+        try { await apiFetch(BASE_URL + url, { method: 'DELETE', headers: bearer(token) }); } catch (e) {}
         onBack();
       } },
     ]);
@@ -1902,7 +1929,12 @@ function RecipeDetailScreen({ token, me, isAdmin, recipeId, onBack, onUser, onOp
       ) : recipe ? (
         <ScrollView contentContainerStyle={{ padding: 16 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {recipe.imageUrl && <Image source={{ uri: recipe.imageUrl }} style={styles.detailImage} />}
-          <Text style={[styles.detailTitle, { color: colors.text }]}>{recipe.title}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Text style={[styles.detailTitle, { color: colors.text, flex: 1 }]}>{recipe.title}</Text>
+            <TouchableOpacity onPress={toggleFav} activeOpacity={0.7} style={{ padding: 6 }}>
+              <Text style={{ fontSize: 28 }}>{recipe.isFavoritedByCurrentUser ? '❤️' : '🤍'}</Text>
+            </TouchableOpacity>
+          </View>
           <TouchableOpacity onPress={() => onUser(recipe.username)} activeOpacity={0.7}>
             <Text style={[styles.cardUser, { color: colors.accent }]}>@{recipe.username}</Text>
           </TouchableOpacity>
@@ -1988,16 +2020,16 @@ function AdminScreen({ token, push }: { token: string; push: (n: Nav) => void })
 
   async function loadAll() {
     try {
-      const s = await fetch(BASE_URL + '/api/admin/stats', { headers: bearer(token) }); if (s.ok) setStats(await s.json());
-      const r = await fetch(BASE_URL + '/api/admin/reports', { headers: bearer(token) }); if (r.ok) setReports(await r.json());
-      const u = await fetch(BASE_URL + '/api/admin/users', { headers: bearer(token) }); if (u.ok) setUsers(await u.json());
+      const s = await apiFetch(BASE_URL + '/api/admin/stats', { headers: bearer(token) }); if (s.ok) setStats(await s.json());
+      const r = await apiFetch(BASE_URL + '/api/admin/reports', { headers: bearer(token) }); if (r.ok) setReports(await r.json());
+      const u = await apiFetch(BASE_URL + '/api/admin/users', { headers: bearer(token) }); if (u.ok) setUsers(await u.json());
     } catch (e) {} finally { setLoading(false); }
   }
   useEffect(() => { loadAll(); }, []);
 
   async function resolveReport(id: number) {
     setReports((prev) => prev.map((x) => x.id === id ? { ...x, status: 'RESOLVED' } : x));
-    try { await fetch(BASE_URL + '/api/admin/reports/' + id + '/resolve', { method: 'POST', headers: bearer(token) }); } catch (e) {}
+    try { await apiFetch(BASE_URL + '/api/admin/reports/' + id + '/resolve', { method: 'POST', headers: bearer(token) }); } catch (e) {}
   }
   function deleteTarget(rep: any) {
     const type = (rep.targetType || '').toUpperCase();
@@ -2006,13 +2038,13 @@ function AdminScreen({ token, push }: { token: string; push: (n: Nav) => void })
     Alert.alert(t('deleteContent'), '#' + rep.targetId, [
       { text: t('cancel'), style: 'cancel' },
       { text: t('delete'), style: 'destructive', onPress: async () => {
-        try { await fetch(BASE_URL + url, { method: 'DELETE', headers: bearer(token) }); await resolveReport(rep.id); } catch (e) {}
+        try { await apiFetch(BASE_URL + url, { method: 'DELETE', headers: bearer(token) }); await resolveReport(rep.id); } catch (e) {}
       } },
     ]);
   }
   async function toggleBan(u: any) {
     try {
-      const r = await fetch(BASE_URL + '/api/admin/users/' + u.id + '/ban', { method: 'POST', headers: bearer(token) });
+      const r = await apiFetch(BASE_URL + '/api/admin/users/' + u.id + '/ban', { method: 'POST', headers: bearer(token) });
       const d = await r.json().catch(() => ({}));
       Alert.alert(t('info'), d.message || (r.ok ? 'OK' : 'Hata'));
       loadAll();
