@@ -93,11 +93,15 @@ Ardından Expo Go ile terminaldeki **QR kodu** okut. Uygulama canlı backend'e b
 
 ## 📸 Ekran Görüntüleri
 
-> (Buraya birkaç ekran görüntüsü eklenecek: Keşfet, Tarif Detay, Profil, Mesajlaşma, Admin.)
+| Keşfet | Tarif Detayı | Profil |
+|:---:|:---:|:---:|
+| <img src="screenshots/01-kesfet.jpeg" width="240"/> | <img src="screenshots/02-tarif-detay.jpeg" width="240"/> | <img src="screenshots/05-profil.jpeg" width="240"/> |
 
-| Keşfet | Tarif Detay | Profil |
-|---|---|---|
-| _görsel_ | _görsel_ | _görsel_ |
+| Favoriler | Tarif Ekle | Mesajlaşma |
+|:---:|:---:|:---:|
+| <img src="screenshots/07-favoriler.jpeg" width="240"/> | <img src="screenshots/08-tarif-ekle.jpeg" width="240"/> | <img src="screenshots/10-mesajlar.jpeg" width="240"/> |
+
+> Tarif detayında yıldızla puanlama, fotoğraflı "denemeler" ve yorumlar; profilde takip/istek, gizli hesap, tema ve dil seçenekleri yer alır. "Şifremi unuttum" akışı e-posta ile tek kullanımlık kod gönderir.
 
 ---
 
